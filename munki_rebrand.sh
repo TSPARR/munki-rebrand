@@ -236,12 +236,29 @@ replace_strings() {
         plist_to_xml "$strings_file"
     fi
     
-    awk -v old="$localized" -v new="$appname" '{gsub(old, new); print}' "$strings_file" > "${strings_file}.tmp"
-    mv "${strings_file}.tmp" "$strings_file"
+    # Create backup and process line by line like Python script
+    cp "$strings_file" "${strings_file}.bak"
+    
+    # Process the file line by line, only replacing on right side of = and not in comments
+    while IFS= read -r line; do
+        # Check if line contains = and doesn't start with /*
+        if [[ "$line" == *"="* && "$line" != "/*"* ]]; then
+            # Split on first = and replace only in right side
+            left="${line%%=*}="
+            right="${line#*=}"
+            right="${right//$localized/$appname}"
+            echo "${left}${right}"
+        else
+            echo "$line"
+        fi
+    done < "${strings_file}.bak" > "$strings_file"
+    
+    rm "${strings_file}.bak"
     
     if [[ "$was_utf16" == true ]]; then
         log "Converting back to UTF-16..."
-        iconv -f utf-8 -t utf-16le "$strings_file" > "${strings_file}.utf16"
+        # Use utf-16 (not utf-16le) to include the BOM
+        iconv -f utf-8 -t utf-16 "$strings_file" > "${strings_file}.utf16"
         mv "${strings_file}.utf16" "$strings_file"
     elif [[ "$was_binary" == true ]]; then
         log "Converting back to binary plist..."
@@ -761,16 +778,18 @@ main() {
                 
                 if [[ -n "$icns" && -f "$icns" ]]; then
                     log "Looking for icon files in $resources_dir"
-                    for icon in "${icon_files[@]}"; do
-                        local icon_path="$resources_dir/$icon"
-                        if [[ -f "$icon_path" ]]; then
-                            echo "Replacing $icon_path with custom icon..."
-                            cp "$icns" "$icon_path"
-                            log "Successfully replaced $icon_path"
-                        else
-                            log "Icon file $icon_path not found"
-                        fi
-                    done
+                    if [[ ${#icon_files[@]} -gt 0 ]]; then
+                        for icon in "${icon_files[@]}"; do
+                            local icon_path="$resources_dir/$icon"
+                            if [[ -f "$icon_path" ]]; then
+                                echo "Replacing $icon_path with custom icon..."
+                                cp "$icns" "$icon_path"
+                                log "Successfully replaced $icon_path"
+                            else
+                                log "Icon file $icon_path not found"
+                            fi
+                        done
+                    fi
                     
                     find "$resources_dir" -name "*.icns" -type f | while read -r existing_icon; do
                         echo "Replacing additional icon: $existing_icon"
