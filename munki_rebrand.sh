@@ -628,6 +628,8 @@ main() {
     
     core_pkg=$(find "$root_dir" -name "munkitools_core*" -type d 2>/dev/null | head -1)
     python_pkg=$(find "$root_dir" -name "munkitools_python*" -type d 2>/dev/null | head -1)
+    local launchd_pkg=$(find "$root_dir" -name "munkitools_launchd*" -type d 2>/dev/null | head -1)
+    local app_usage_pkg=$(find "$root_dir" -name "munkitools_app_usage*" -type d 2>/dev/null | head -1)
     
     local actual_app_pkg=""
     for candidate in "$app_pkg" "$admin_pkg"; do
@@ -869,12 +871,62 @@ main() {
         local ent_file="$TMP_DIR/entitlements.plist"
         echo "$entitlements_content" > "$ent_file"
         
-        local binaries=(
-            "$app_payload/$MSC_APP_PATH/Contents/PlugIns/MSCDockTilePlugin.docktileplugin"
-            "$app_payload/$MSC_APP_PATH/Contents/Helpers/munki-notifier.app"
-            "$app_payload/$MS_APP_PATH"
-            "$app_payload/$MSC_APP_PATH"
-        )
+        # Start with an empty array and dynamically find all binaries
+        local binaries=()
+        
+        # App package binaries (including the specific ones we know about)
+        if [[ -d "$app_payload" ]]; then
+            binaries+=(
+                "$app_payload/$MSC_APP_PATH/Contents/PlugIns/MSCDockTilePlugin.docktileplugin"
+                "$app_payload/$MSC_APP_PATH/Contents/Helpers/munki-notifier.app"
+                "$app_payload/$MS_APP_PATH"
+                "$app_payload/$MSC_APP_PATH"
+            )
+        fi
+        
+        # Core package binaries
+        if [[ -d "$core_payload" ]]; then
+            local core_binaries
+            core_binaries=$(find "$core_payload" -type f -perm +111 2>/dev/null)
+            while IFS= read -r binary; do
+                if [[ -n "$binary" ]] && (is_signable_bin "$binary" || is_signable_lib "$binary"); then
+                    binaries+=("$binary")
+                fi
+            done <<< "$core_binaries"
+        fi
+        
+        # Admin package binaries
+        if [[ -n "$admin_pkg" && -d "$admin_pkg/Payload" ]]; then
+            local admin_binaries
+            admin_binaries=$(find "$admin_pkg/Payload" -type f -perm +111 2>/dev/null)
+            while IFS= read -r binary; do
+                if [[ -n "$binary" ]] && (is_signable_bin "$binary" || is_signable_lib "$binary"); then
+                    binaries+=("$binary")
+                fi
+            done <<< "$admin_binaries"
+        fi
+        
+        # App usage package binaries
+        if [[ -n "$app_usage_pkg" && -d "$app_usage_pkg/Payload" ]]; then
+            local app_usage_binaries
+            app_usage_binaries=$(find "$app_usage_pkg/Payload" -type f -perm +111 2>/dev/null)
+            while IFS= read -r binary; do
+                if [[ -n "$binary" ]] && (is_signable_bin "$binary" || is_signable_lib "$binary"); then
+                    binaries+=("$binary")
+                fi
+            done <<< "$app_usage_binaries"
+        fi
+        
+        # Launchd package - usually no binaries but check anyway
+        if [[ -n "$launchd_pkg" && -d "$launchd_pkg/Payload" ]]; then
+            local launchd_binaries
+            launchd_binaries=$(find "$launchd_pkg/Payload" -type f -perm +111 2>/dev/null)
+            while IFS= read -r binary; do
+                if [[ -n "$binary" ]] && (is_signable_bin "$binary" || is_signable_lib "$binary"); then
+                    binaries+=("$binary")
+                fi
+            done <<< "$launchd_binaries"
+        fi
         
         if [[ "$VERBOSE" == true ]]; then
             echo "DEBUG: Constructed binary paths:"
@@ -906,11 +958,7 @@ main() {
             done
         fi
         
-        local msu="$core_payload/$MUNKI_PATH/managedsoftwareupdate"
-        if [[ -f "$msu" ]] && is_binary "$msu"; then
-            binaries+=("$msu")
-        fi
-        
+        # Python package binaries (needs specific handling for .so/.dylib files)
         local pylib="$python_payload/$PY_CUR/lib"
         local pybin="$python_payload/$PY_CUR/bin"
         
@@ -931,7 +979,7 @@ main() {
         
         local entitled_binaries=(
             "$python_payload/$PY_CUR/Resources/Python.app"
-            "$pybin/python3"
+            "$python_payload/$PY_CUR/bin/python3"
         )
         
         if [[ "$VERBOSE" == true ]]; then
