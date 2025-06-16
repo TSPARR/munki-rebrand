@@ -365,6 +365,15 @@ sign_binary() {
     local force="$4"
     local entitlements="$5"
     
+    if [[ "$VERBOSE" == true ]]; then
+        echo "sign_binary called with:"
+        echo "  signing_id: $signing_id"
+        echo "  binary: $binary"
+        echo "  deep: $deep"
+        echo "  force: $force"
+        echo "  entitlements: $entitlements"
+    fi
+    
     local cmd=("$CODESIGN" --sign "$signing_id")
     
     if [[ "$force" == true ]]; then
@@ -386,6 +395,9 @@ sign_binary() {
     cmd+=(--options runtime)
     cmd+=("$binary")
     
+    if [[ "$VERBOSE" == true ]]; then
+        echo "Executing codesign command: ${cmd[*]}"
+    fi
     run_cmd "${cmd[@]}"
 }
 
@@ -807,6 +819,25 @@ main() {
     if [[ -n "$sign_binaries_id" ]]; then
         echo "Signing binaries (this may take a while)..."
         
+        log "Payload directories:"
+        log "  app_payload: $app_payload"
+        log "  core_payload: $core_payload"
+        log "  python_payload: $python_payload"
+        log "App path variables:"
+        log "  MSC_APP_PATH: $MSC_APP_PATH"
+        log "  MS_APP_PATH: $MS_APP_PATH"
+        log "  MN_APP_PATH: $MN_APP_PATH"
+        
+        log "Checking payload contents:"
+        if [[ -d "$app_payload" ]]; then
+            log "Contents of app_payload ($app_payload):"
+            find "$app_payload" -name "*.app" -type d | head -10 | while read -r app; do
+                log "  Found app: $app"
+            done
+        else
+            log "ERROR: app_payload directory does not exist: $app_payload"
+        fi
+        
         local entitlements_content='<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -826,6 +857,36 @@ main() {
             "$app_payload/$MSC_APP_PATH"
         )
         
+        if [[ "$VERBOSE" == true ]]; then
+            echo "DEBUG: Constructed binary paths:"
+            echo "  MSC app: $app_payload/$MSC_APP_PATH"
+            echo "  MS app: $app_payload/$MS_APP_PATH"  
+            echo "  MN app: $app_payload/$MN_APP_PATH"
+            echo "  Plugin: $app_payload/$MSC_APP_PATH/Contents/PlugIns/MSCDockTilePlugin.docktileplugin"
+            
+            echo "DEBUG: Initial binaries to sign:"
+            for binary in "${binaries[@]}"; do
+                echo "  - $binary"
+                if [[ -e "$binary" ]]; then
+                    echo "    EXISTS"
+                else
+                    echo "    MISSING"
+                    # Let's see what's actually in the parent directory
+                    local parent_dir
+                    parent_dir=$(dirname "$binary")
+                    if [[ -d "$parent_dir" ]]; then
+                        echo "    Parent directory exists: $parent_dir"
+                        echo "    Contents of parent directory:"
+                        ls -la "$parent_dir" 2>/dev/null | head -5 | while read -r line; do
+                            echo "      $line"
+                        done
+                    else
+                        echo "    Parent directory does not exist: $parent_dir"
+                    fi
+                fi
+            done
+        fi
+        
         local msu="$core_payload/$MUNKI_PATH/managedsoftwareupdate"
         if [[ -f "$msu" ]] && is_binary "$msu"; then
             binaries+=("$msu")
@@ -836,11 +897,16 @@ main() {
         
         for pydir in "$pylib" "$pybin"; do
             if [[ -d "$pydir" ]]; then
-                find "$pydir" -type f \( -perm +111 -o -name "*.so" -o -name "*.dylib" \) | while read -r binary; do
-                    if is_signable_bin "$binary" || is_signable_lib "$binary"; then
+                # Use a temporary file to avoid subshell issue
+                local temp_file
+                temp_file=$(mktemp)
+                find "$pydir" -type f \( -perm +111 -o -name "*.so" -o -name "*.dylib" \) > "$temp_file"
+                while IFS= read -r binary; do
+                    if [[ -n "$binary" ]] && (is_signable_bin "$binary" || is_signable_lib "$binary"); then
                         binaries+=("$binary")
                     fi
-                done
+                done < "$temp_file"
+                rm -f "$temp_file"
             fi
         done
         
@@ -849,23 +915,58 @@ main() {
             "$pybin/python3"
         )
         
+        if [[ "$VERBOSE" == true ]]; then
+            echo "Found ${#binaries[@]} binaries to sign:"
+            for binary in "${binaries[@]}"; do
+                echo "  - $binary"
+            done
+        fi
+        
         for binary in "${binaries[@]}"; do
-            if [[ -f "$binary" ]]; then
-                log "Signing $binary..."
+            if [[ -e "$binary" ]]; then
+                if [[ "$VERBOSE" == true ]]; then
+                    echo "Signing $binary..."
+                    if [[ -f "$binary" ]]; then
+                        echo "  File exists and is regular file: $binary"
+                    elif [[ -d "$binary" ]]; then
+                        echo "  File exists and is directory (app bundle): $binary"
+                    fi
+                fi
                 sign_binary "$sign_binaries_id" "$binary" true true ""
+            else
+                echo "WARNING: Binary not found: $binary"
             fi
         done
         
+        if [[ "$VERBOSE" == true ]]; then
+            echo "Found ${#entitled_binaries[@]} entitled binaries to sign:"
+            for binary in "${entitled_binaries[@]}"; do
+                echo "  - $binary"
+            done
+        fi
+        
         for binary in "${entitled_binaries[@]}"; do
-            if [[ -f "$binary" ]]; then
-                log "Signing $binary with entitlements..."
+            if [[ -e "$binary" ]]; then
+                if [[ "$VERBOSE" == true ]]; then
+                    echo "Signing $binary with entitlements..."
+                    if [[ -f "$binary" ]]; then
+                        echo "  File exists and is regular file: $binary"
+                    elif [[ -d "$binary" ]]; then
+                        echo "  File exists and is directory (app bundle): $binary"
+                    fi
+                fi
                 sign_binary "$sign_binaries_id" "$binary" true true "$ent_file"
+            else
+                echo "WARNING: Entitled binary not found: $binary"
             fi
         done
         
         local py_fwkpath="$python_payload/$PY_FWK"
         if [[ -d "$py_fwkpath" ]]; then
-            log "Signing $py_fwkpath..."
+            if [[ "$VERBOSE" == true ]]; then
+                echo "Signing Python framework..."
+                echo "  Signing $py_fwkpath..."
+            fi
             sign_binary "$sign_binaries_id" "$py_fwkpath" true true ""
         fi
     fi
