@@ -628,6 +628,10 @@ main() {
     
     core_pkg=$(find "$root_dir" -name "munkitools_core*" -type d 2>/dev/null | head -1)
     python_pkg=$(find "$root_dir" -name "munkitools_python*" -type d 2>/dev/null | head -1)
+    if [[ -z "$python_pkg" ]]; then
+        # Try alternative naming
+        python_pkg=$(find "$root_dir" -name "munkitools_pythonlibs*" -type d 2>/dev/null | head -1)
+    fi
     local launchd_pkg=$(find "$root_dir" -name "munkitools_launchd*" -type d 2>/dev/null | head -1)
     local app_usage_pkg=$(find "$root_dir" -name "munkitools_app_usage*" -type d 2>/dev/null | head -1)
     
@@ -977,10 +981,17 @@ main() {
             fi
         done
         
-        local entitled_binaries=(
-            "$python_payload/$PY_CUR/Resources/Python.app"
-            "$python_payload/$PY_CUR/bin/python3"
-        )
+        # Add entitled binaries only if they exist
+        local entitled_binaries=()
+        local python_app="$python_payload/$PY_CUR/Resources/Python.app"
+        local python3_bin="$python_payload/$PY_CUR/bin/python3"
+        
+        if [[ -e "$python_app" ]]; then
+            entitled_binaries+=("$python_app")
+        fi
+        if [[ -e "$python3_bin" ]]; then
+            entitled_binaries+=("$python3_bin")
+        fi
         
         if [[ "$VERBOSE" == true ]]; then
             echo "Found ${#binaries[@]} binaries to sign:"
@@ -1007,12 +1018,15 @@ main() {
         
         if [[ "$VERBOSE" == true ]]; then
             echo "Found ${#entitled_binaries[@]} entitled binaries to sign:"
-            for binary in "${entitled_binaries[@]}"; do
-                echo "  - $binary"
-            done
+            if [[ ${#entitled_binaries[@]} -gt 0 ]]; then
+                for binary in "${entitled_binaries[@]}"; do
+                    echo "  - $binary"
+                done
+            fi
         fi
         
-        for binary in "${entitled_binaries[@]}"; do
+        if [[ ${#entitled_binaries[@]} -gt 0 ]]; then
+            for binary in "${entitled_binaries[@]}"; do
             if [[ -e "$binary" ]]; then
                 if [[ "$VERBOSE" == true ]]; then
                     echo "Signing $binary with entitlements..."
@@ -1026,7 +1040,8 @@ main() {
             else
                 echo "WARNING: Entitled binary not found: $binary"
             fi
-        done
+            done
+        fi
         
         local py_fwkpath="$python_payload/$PY_FWK"
         if [[ -d "$py_fwkpath" ]]; then
