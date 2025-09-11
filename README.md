@@ -1,5 +1,7 @@
 # munki_rebrand
 
+> **Note for Munki 7 Users:** To build packages for Munki 7, please use the `munki7-dev` branch which contains the bash version of the script (`munki_rebrand.sh`) with enhanced support for Munki 7. This main branch contains the Python version for Munki 6 and earlier.
+
 munki_rebrand is a script to rebrand the Managed Software Center app from Greg Neagle's [Munki](https://github.com/munki/munki). It allows you to give the app a different name in Finder (in all localized languages if required), modify its icon, and add an optional postinstall script to the installer pkg.
 
 This is version 4 of munki_rebrand. If you wish to use it to rebrand munki 3.6 or higher, you will need to have Xcode installed and have opened it and installed the extra components. The ability to provide your own .icns file has been removed and the icon will be generated from a 1024x1024px .png only.
