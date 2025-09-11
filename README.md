@@ -2,7 +2,9 @@
 
 munki_rebrand is a script to rebrand the Managed Software Center app from Greg Neagle's [Munki](https://github.com/munki/munki). It allows you to give the app a different name in Finder (in all localized languages if required), modify its icon, and add an optional postinstall script to the installer pkg.
 
-This is version 4 of munki_rebrand. If you wish to use it to rebrand munki 3.6 or higher, you will need to have Xcode installed and have opened it and installed the extra components. The ability to provide your own .icns file has been removed and the icon will be generated from a 1024x1024px .png only.
+This is version 6.0 of munki_rebrand, rewritten in bash. It supports Munki versions 3.6 through 7.x. You will need to have Xcode installed and have opened it and installed the extra components. The ability to provide your own .icns file has been removed and the icon will be generated from a 1024x1024px .png only.
+
+Note: The original Python version (v5.6) has been moved to the Archive/ directory for reference.
 
 It will either:
 
@@ -13,13 +15,12 @@ It will either:
 ## Pre-requisites
  * Apple Mac running OS X/macOS 10.15+ 
  * Xcode 12+ (opened once, components installed)
- * Python3
 
 ## Usage
 
 Please note: munki_rebrand must be run as root in order to successfully build the output pkg.
 
-At its simplest you can use ```sudo ./munki_rebrand.py --appname "Amazing Software Center"``` to download the latest munkitools pkg from Github, and rename Managed Software Center to Amazing Software Center in the Finder in all localized versions of "Managed Software Center".
+At its simplest you can use ```sudo ./munki_rebrand.sh --appname "Amazing Software Center"``` to download the latest munkitools pkg from Github, and rename Managed Software Center to Amazing Software Center in the Finder in all localized versions of "Managed Software Center".
 
 If you specify ```--pkg``` you can use either a pathname on disk to a prebuilt munkitools pkg or use an http/s URL to download one, which munki_rebrand will then attempt to rebrand.
 
@@ -31,7 +32,7 @@ The ```--sign-package``` option allows you to have a rebranded munki package tha
 
 The ```--sign-binaries``` option allows you to recursively sign the app binaries for the rebranded Managed Software Center, allowing for notarization of the pkg. To use this option, your Developer Application Certificate must be installed into the keychain. When using this option, you must specify the entire ```Common Name``` of the certificate. Example: ```"Developer ID Applications: Munki (U8PN57A5N2)"```
 
-For usage help please see ```sudo ./munki_rebrand.py --help```
+For usage help please see ```sudo ./munki_rebrand.sh --help```
 
 ## Troubleshooting/Notes
 * If you receive the message 
@@ -43,7 +44,7 @@ then try the following:
 sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
 ```
 You can run ```sudo xcode-select -s /Library/Developer/CommandLineTools``` to revert this afterwards if you so wish.
-* The `Assets.xcassets folder` must be located in the same folder that `munki_rebrand.py` is run from
+* The `Assets.xcassets folder` must be located in the same folder that `munki_rebrand.sh` is run from
 * The app will still appear as ```Managed Software Center.app``` in the filesystem e.g. when viewed in Terminal. This is by design, in case the app is called or searched for by name by any other process. The changed name will only appear in Finder, the Dock, and the app's menu bar.
 * The pkg ids of ```com.google.munki.*``` are also left unchanged for similar reasons.
 
