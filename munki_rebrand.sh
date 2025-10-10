@@ -26,7 +26,7 @@
 
 set -euo pipefail
 
-VERSION="5.6"
+VERSION="6.0"
 APPNAME="Managed Software Center"
 
 get_localized_name() {
