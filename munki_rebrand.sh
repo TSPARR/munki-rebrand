@@ -1054,7 +1054,7 @@ main() {
     fi
     
     local final_pkg
-    final_pkg="$(pwd)/${outfilename}-${munki_version}.pkg"
+    final_pkg="${outfilename}-${munki_version}.pkg"
     echo "Building output pkg at $final_pkg..."
     flatten_pkg "$root_dir" "$final_pkg"
     
