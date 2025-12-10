@@ -90,6 +90,8 @@ MN_APP_PATH="$MSC_APP_PATH/Contents/Helpers/munki-notifier.app"
 MUNKI_PATH="usr/local/munki"
 PY_FWK="$MUNKI_PATH/Python.Framework"
 PY_CUR="$PY_FWK/Versions/Current"
+CURRENT_USER=$(id -un)
+SIGNING_USER="${SUDO_USER:-$CURRENT_USER}"
 
 cleanup() {
     echo "Cleaning up..."
@@ -132,6 +134,14 @@ run_cmd_output() {
     local output
     output=$("$@" 2>/dev/null) || die "Command failed: $*"
     echo "$output"
+}
+
+run_sign_cmd() {
+    if [[ -n "$SIGNING_USER" && "$SIGNING_USER" != "$CURRENT_USER" ]]; then
+        run_cmd sudo -H -u "$SIGNING_USER" -- "$@"
+    else
+        run_cmd "$@"
+    fi
 }
 
 get_latest_munki_url() {
@@ -370,7 +380,7 @@ sign_package() {
     local signing_id="$1"
     local pkg="$2"
     echo "Signing pkg..."
-    run_cmd "$PRODUCTSIGN" --sign "$signing_id" "$pkg" "${pkg}-signed"
+    run_sign_cmd "$PRODUCTSIGN" --sign "$signing_id" "$pkg" "${pkg}-signed"
     echo "Moving ${pkg}-signed to ${pkg}..."
     mv "${pkg}-signed" "$pkg"
 }
@@ -415,7 +425,7 @@ sign_binary() {
     if [[ "$VERBOSE" == true ]]; then
         echo "Executing codesign command: ${cmd[*]}"
     fi
-    run_cmd "${cmd[@]}"
+    run_sign_cmd "${cmd[@]}"
 }
 
 is_signable_bin() {
@@ -537,7 +547,12 @@ main() {
         die "You must run this script as root in order to build your new munki installer pkg!"
     fi
     
-    TMP_DIR=$(mktemp -d)
+    local tmp_template="${TMPDIR:-/tmp}/munki_rebrand.XXXXXX"
+    if [[ -n "$sign_binaries_id" && -n "$SIGNING_USER" && "$SIGNING_USER" != "$CURRENT_USER" ]]; then
+        # Use a shared temp location when signing as a non-root user so they can traverse the path.
+        tmp_template="/tmp/munki_rebrand.XXXXXX"
+    fi
+    TMP_DIR=$(mktemp -d "$tmp_template")
     
     local outfilename="${output_file:-munkitools}"
     
@@ -839,7 +854,15 @@ main() {
         fi
     done
     
-    find "$root_dir" -exec chown 0:80 {} \;
+    # Allow codesign to run as the invoking user (access to their keychain) by making payload writable.
+    if [[ -n "$sign_binaries_id" && -n "$SIGNING_USER" && "$SIGNING_USER" != "$CURRENT_USER" ]]; then
+        echo "Preparing files for signing as $SIGNING_USER..."
+        chown -R "$SIGNING_USER" "$TMP_DIR"
+        chmod u+rwx "$TMP_DIR"
+        chmod -R u+rwX "$root_dir"
+    else
+        find "$root_dir" -exec chown 0:80 {} \;
+    fi
     
     if [[ -n "$sign_binaries_id" ]]; then
         echo "Signing binaries (this may take a while)..."
@@ -1052,6 +1075,9 @@ main() {
             sign_binary "$sign_binaries_id" "$py_fwkpath" true true ""
         fi
     fi
+    
+    echo "Restoring package ownership to root:admin..."
+    find "$root_dir" -exec chown 0:80 {} \;
     
     local final_pkg
     final_pkg="${outfilename}-${munki_version}.pkg"
