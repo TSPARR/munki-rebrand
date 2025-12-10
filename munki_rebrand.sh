@@ -78,11 +78,13 @@ CURL="/usr/bin/curl"
 JQ="/usr/bin/jq"
 ACTOOL_PATHS=("/usr/bin/actool" "/Applications/Xcode.app/Contents/Developer/usr/bin/actool")
 XCRUN="/usr/bin/xcrun"
+SPCTL="/usr/sbin/spctl"
 
 MUNKIURL="https://api.github.com/repos/munki/munki/releases/latest"
 
 VERBOSE=false
 TMP_DIR=""
+FINAL_PKG=""
 
 MSC_APP_PATH="Applications/Managed Software Center.app"
 MS_APP_PATH="$MSC_APP_PATH/Contents/Helpers/MunkiStatus.app"
@@ -98,6 +100,9 @@ cleanup() {
     echo "Cleaning up..."
     if [[ -n "$TMP_DIR" && -d "$TMP_DIR" ]]; then
         rm -rf "$TMP_DIR"
+    fi
+    if [[ "$VERBOSE" == true && -n "$FINAL_PKG" ]]; then
+        verify_final_pkg "$FINAL_PKG"
     fi
     echo "Done."
 }
@@ -426,6 +431,39 @@ notarize_pkg() {
     echo "Notarization accepted. Stapling ticket to $pkg..."
     run_sign_cmd "$XCRUN" stapler staple "$pkg"
     echo "Stapling complete."
+}
+
+verify_final_pkg() {
+    local pkg="$1"
+    if [[ "$VERBOSE" != true ]]; then
+        return
+    fi
+    if [[ -z "$pkg" || ! -f "$pkg" ]]; then
+        log "Skipping verbose verification; final pkg not found: '$pkg'"
+        return
+    fi
+    
+    echo "Verbose verification for $pkg..."
+    
+    local exit_code
+    
+    echo "Running: $PKGUTIL --check-signature \"$pkg\""
+    if ! "$PKGUTIL" --check-signature "$pkg"; then
+        exit_code=$?
+        echo "WARNING: pkgutil signature check failed (exit $exit_code)" >&2
+    fi
+    
+    echo "Running: $SPCTL -a -vv --type install \"$pkg\""
+    if ! "$SPCTL" -a -vv --type install "$pkg"; then
+        exit_code=$?
+        echo "WARNING: spctl verification failed (exit $exit_code)" >&2
+    fi
+    
+    echo "Running: $XCRUN stapler validate \"$pkg\""
+    if ! "$XCRUN" stapler validate "$pkg"; then
+        exit_code=$?
+        echo "WARNING: stapler validation failed (exit $exit_code)" >&2
+    fi
 }
 
 sign_binary() {
@@ -1141,6 +1179,7 @@ main() {
     
     local final_pkg
     final_pkg="${outfilename}-${munki_version}.pkg"
+    FINAL_PKG="$final_pkg"
     echo "Building output pkg at $final_pkg..."
     flatten_pkg "$root_dir" "$final_pkg"
     
