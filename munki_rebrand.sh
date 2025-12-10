@@ -77,6 +77,7 @@ ICONUTIL="/usr/bin/iconutil"
 CURL="/usr/bin/curl"
 JQ="/usr/bin/jq"
 ACTOOL_PATHS=("/usr/bin/actool" "/Applications/Xcode.app/Contents/Developer/usr/bin/actool")
+XCRUN="/usr/bin/xcrun"
 
 MUNKIURL="https://api.github.com/repos/munki/munki/releases/latest"
 
@@ -385,6 +386,48 @@ sign_package() {
     mv "${pkg}-signed" "$pkg"
 }
 
+ensure_notarization_tools() {
+    if [[ ! -x "$XCRUN" ]]; then
+        die "xcrun not found; install Xcode command line tools to use --notarize"
+    fi
+    
+    if ! "$XCRUN" -f notarytool >/dev/null 2>&1; then
+        die "notarytool not available; Xcode 13+ is required for notarization"
+    fi
+    
+    if ! "$XCRUN" -f stapler >/dev/null 2>&1; then
+        die "stapler not available; Xcode command line tools are required"
+    fi
+}
+
+notarize_pkg() {
+    local pkg="$1"
+    local profile="$2"
+    
+    ensure_notarization_tools
+    
+    echo "Submitting $pkg for notarization with profile '$profile'..."
+    local output
+    output=$(run_sign_cmd "$XCRUN" notarytool submit "$pkg" --keychain-profile "$profile" --wait --output-format json)
+    
+    if [[ "$VERBOSE" == true ]]; then
+        echo "Notarytool response:" >&2
+        echo "$output" >&2
+    fi
+    
+    local status
+    status=$(echo "$output" | "$JQ" -r '.status' 2>/dev/null || true)
+    
+    if [[ "$status" != "Accepted" ]]; then
+        echo "$output"
+        die "Notarization failed${status:+ (status: $status)}. See output above for details."
+    fi
+    
+    echo "Notarization accepted. Stapling ticket to $pkg..."
+    run_sign_cmd "$XCRUN" stapler staple "$pkg"
+    echo "Stapling complete."
+}
+
 sign_binary() {
     local signing_id="$1"
     local binary="$2"
@@ -456,6 +499,7 @@ OPTIONS:
     -r, --resource-addition PATH   Optional additional file for scripts directory
     -s, --sign-package ID      Sign package with Developer ID Installer certificate
     -S, --sign-binaries ID     Sign binaries with Developer ID Application certificate
+    --notarize PROFILE         Submit signed pkg for notarization with given notarytool keychain profile
     -v, --verbose              Be more verbose
     -x, --version              Print version and exit
     -h, --help                 Show this help
@@ -478,6 +522,7 @@ main() {
     local resource_addition=""
     local sign_package_id=""
     local sign_binaries_id=""
+    local notarize_profile=""
     
     while [[ $# -gt 0 ]]; do
         case $1 in
@@ -517,6 +562,13 @@ main() {
                 sign_binaries_id="$2"
                 shift 2
                 ;;
+            --notarize)
+                if [[ -z "${2:-}" || "$2" == -* ]]; then
+                    die "--notarize requires a notarytool keychain profile name (e.g. 'my-notary-profile')"
+                fi
+                notarize_profile="$2"
+                shift 2
+                ;;
             -v|--verbose)
                 VERBOSE=true
                 shift
@@ -545,6 +597,14 @@ main() {
     
     if [[ $EUID -ne 0 ]]; then
         die "You must run this script as root in order to build your new munki installer pkg!"
+    fi
+    
+    if [[ -n "$notarize_profile" && -z "$sign_package_id" ]]; then
+        die "--notarize requires --sign-package so the installer is eligible for notarization"
+    fi
+    
+    if [[ -n "$notarize_profile" && -z "$sign_binaries_id" ]]; then
+        echo "WARNING: --notarize used without --sign-binaries. Notarization may fail if embedded binaries are not signed."
     fi
     
     local tmp_template="${TMPDIR:-/tmp}/munki_rebrand.XXXXXX"
@@ -1086,6 +1146,10 @@ main() {
     
     if [[ -n "$sign_package_id" ]]; then
         sign_package "$sign_package_id" "$final_pkg"
+    fi
+    
+    if [[ -n "$notarize_profile" ]]; then
+        notarize_pkg "$final_pkg" "$notarize_profile"
     fi
     
     echo "Rebranding complete! Output: $final_pkg"
