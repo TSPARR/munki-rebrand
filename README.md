@@ -55,3 +55,4 @@ You can run ```sudo xcode-select -s /Library/Developer/CommandLineTools``` to re
 ## To-do
 * Enable the splitting of the distribution pkg into its component pkgs so that the user can decide which to upgrade (perhaps they do not want to upgrade the launchd package if not necessary and can therefore avoid a reboot).
 * munkiimport the resulting pkg(s)?
+
