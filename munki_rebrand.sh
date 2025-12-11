@@ -77,11 +77,14 @@ ICONUTIL="/usr/bin/iconutil"
 CURL="/usr/bin/curl"
 JQ="/usr/bin/jq"
 ACTOOL_PATHS=("/usr/bin/actool" "/Applications/Xcode.app/Contents/Developer/usr/bin/actool")
+XCRUN="/usr/bin/xcrun"
+SPCTL="/usr/sbin/spctl"
 
 MUNKIURL="https://api.github.com/repos/munki/munki/releases/latest"
 
 VERBOSE=false
 TMP_DIR=""
+FINAL_PKG=""
 
 MSC_APP_PATH="Applications/Managed Software Center.app"
 MS_APP_PATH="$MSC_APP_PATH/Contents/Helpers/MunkiStatus.app"
@@ -90,11 +93,16 @@ MN_APP_PATH="$MSC_APP_PATH/Contents/Helpers/munki-notifier.app"
 MUNKI_PATH="usr/local/munki"
 PY_FWK="$MUNKI_PATH/Python.Framework"
 PY_CUR="$PY_FWK/Versions/Current"
+CURRENT_USER=$(id -un)
+SIGNING_USER="${SUDO_USER:-$CURRENT_USER}"
 
 cleanup() {
     echo "Cleaning up..."
     if [[ -n "$TMP_DIR" && -d "$TMP_DIR" ]]; then
         rm -rf "$TMP_DIR"
+    fi
+    if [[ "$VERBOSE" == true && -n "$FINAL_PKG" ]]; then
+        verify_final_pkg "$FINAL_PKG"
     fi
     echo "Done."
 }
@@ -132,6 +140,14 @@ run_cmd_output() {
     local output
     output=$("$@" 2>/dev/null) || die "Command failed: $*"
     echo "$output"
+}
+
+run_sign_cmd() {
+    if [[ -n "$SIGNING_USER" && "$SIGNING_USER" != "$CURRENT_USER" ]]; then
+        run_cmd sudo -H -u "$SIGNING_USER" -- "$@"
+    else
+        run_cmd "$@"
+    fi
 }
 
 get_latest_munki_url() {
@@ -370,9 +386,84 @@ sign_package() {
     local signing_id="$1"
     local pkg="$2"
     echo "Signing pkg..."
-    run_cmd "$PRODUCTSIGN" --sign "$signing_id" "$pkg" "${pkg}-signed"
+    run_sign_cmd "$PRODUCTSIGN" --sign "$signing_id" "$pkg" "${pkg}-signed"
     echo "Moving ${pkg}-signed to ${pkg}..."
     mv "${pkg}-signed" "$pkg"
+}
+
+ensure_notarization_tools() {
+    if [[ ! -x "$XCRUN" ]]; then
+        die "xcrun not found; install Xcode command line tools to use --notarize"
+    fi
+    
+    if ! "$XCRUN" -f notarytool >/dev/null 2>&1; then
+        die "notarytool not available; Xcode 13+ is required for notarization"
+    fi
+    
+    if ! "$XCRUN" -f stapler >/dev/null 2>&1; then
+        die "stapler not available; Xcode command line tools are required"
+    fi
+}
+
+notarize_pkg() {
+    local pkg="$1"
+    local profile="$2"
+    
+    ensure_notarization_tools
+    
+    echo "Submitting $pkg for notarization with profile '$profile'..."
+    local output
+    output=$(run_sign_cmd "$XCRUN" notarytool submit "$pkg" --keychain-profile "$profile" --wait --output-format json)
+    
+    if [[ "$VERBOSE" == true ]]; then
+        echo "Notarytool response:" >&2
+        echo "$output" >&2
+    fi
+    
+    local status
+    status=$(echo "$output" | "$JQ" -r '.status' 2>/dev/null || true)
+    
+    if [[ "$status" != "Accepted" ]]; then
+        echo "$output"
+        die "Notarization failed${status:+ (status: $status)}. See output above for details."
+    fi
+    
+    echo "Notarization accepted. Stapling ticket to $pkg..."
+    run_sign_cmd "$XCRUN" stapler staple "$pkg"
+    echo "Stapling complete."
+}
+
+verify_final_pkg() {
+    local pkg="$1"
+    if [[ "$VERBOSE" != true ]]; then
+        return
+    fi
+    if [[ -z "$pkg" || ! -f "$pkg" ]]; then
+        log "Skipping verbose verification; final pkg not found: '$pkg'"
+        return
+    fi
+    
+    echo "Verbose verification for $pkg..."
+    
+    local exit_code
+    
+    echo "Running: $PKGUTIL --check-signature \"$pkg\""
+    if ! "$PKGUTIL" --check-signature "$pkg"; then
+        exit_code=$?
+        echo "WARNING: pkgutil signature check failed (exit $exit_code)" >&2
+    fi
+    
+    echo "Running: $SPCTL -a -vv --type install \"$pkg\""
+    if ! "$SPCTL" -a -vv --type install "$pkg"; then
+        exit_code=$?
+        echo "WARNING: spctl verification failed (exit $exit_code)" >&2
+    fi
+    
+    echo "Running: $XCRUN stapler validate \"$pkg\""
+    if ! "$XCRUN" stapler validate "$pkg"; then
+        exit_code=$?
+        echo "WARNING: stapler validation failed (exit $exit_code)" >&2
+    fi
 }
 
 sign_binary() {
@@ -415,7 +506,7 @@ sign_binary() {
     if [[ "$VERBOSE" == true ]]; then
         echo "Executing codesign command: ${cmd[*]}"
     fi
-    run_cmd "${cmd[@]}"
+    run_sign_cmd "${cmd[@]}"
 }
 
 is_signable_bin() {
@@ -446,6 +537,7 @@ OPTIONS:
     -r, --resource-addition PATH   Optional additional file for scripts directory
     -s, --sign-package ID      Sign package with Developer ID Installer certificate
     -S, --sign-binaries ID     Sign binaries with Developer ID Application certificate
+    --notarize PROFILE         Submit signed pkg for notarization with given notarytool keychain profile
     -v, --verbose              Be more verbose
     -x, --version              Print version and exit
     -h, --help                 Show this help
@@ -468,6 +560,7 @@ main() {
     local resource_addition=""
     local sign_package_id=""
     local sign_binaries_id=""
+    local notarize_profile=""
     
     while [[ $# -gt 0 ]]; do
         case $1 in
@@ -507,6 +600,13 @@ main() {
                 sign_binaries_id="$2"
                 shift 2
                 ;;
+            --notarize)
+                if [[ -z "${2:-}" || "$2" == -* ]]; then
+                    die "--notarize requires a notarytool keychain profile name (e.g. 'my-notary-profile')"
+                fi
+                notarize_profile="$2"
+                shift 2
+                ;;
             -v|--verbose)
                 VERBOSE=true
                 shift
@@ -537,7 +637,20 @@ main() {
         die "You must run this script as root in order to build your new munki installer pkg!"
     fi
     
-    TMP_DIR=$(mktemp -d)
+    if [[ -n "$notarize_profile" && -z "$sign_package_id" ]]; then
+        die "--notarize requires --sign-package so the installer is eligible for notarization"
+    fi
+    
+    if [[ -n "$notarize_profile" && -z "$sign_binaries_id" ]]; then
+        echo "WARNING: --notarize used without --sign-binaries. Notarization may fail if embedded binaries are not signed."
+    fi
+    
+    local tmp_template="${TMPDIR:-/tmp}/munki_rebrand.XXXXXX"
+    if [[ -n "$sign_binaries_id" && -n "$SIGNING_USER" && "$SIGNING_USER" != "$CURRENT_USER" ]]; then
+        # Use a shared temp location when signing as a non-root user so they can traverse the path.
+        tmp_template="/tmp/munki_rebrand.XXXXXX"
+    fi
+    TMP_DIR=$(mktemp -d "$tmp_template")
     
     local outfilename="${output_file:-munkitools}"
     
@@ -839,7 +952,15 @@ main() {
         fi
     done
     
-    find "$root_dir" -exec chown 0:80 {} \;
+    # Allow codesign to run as the invoking user (access to their keychain) by making payload writable.
+    if [[ -n "$sign_binaries_id" && -n "$SIGNING_USER" && "$SIGNING_USER" != "$CURRENT_USER" ]]; then
+        echo "Preparing files for signing as $SIGNING_USER..."
+        chown -R "$SIGNING_USER" "$TMP_DIR"
+        chmod u+rwx "$TMP_DIR"
+        chmod -R u+rwX "$root_dir"
+    else
+        find "$root_dir" -exec chown 0:80 {} \;
+    fi
     
     if [[ -n "$sign_binaries_id" ]]; then
         echo "Signing binaries (this may take a while)..."
@@ -1053,13 +1174,21 @@ main() {
         fi
     fi
     
+    echo "Restoring package ownership to root:admin..."
+    find "$root_dir" -exec chown 0:80 {} \;
+    
     local final_pkg
     final_pkg="${outfilename}-${munki_version}.pkg"
+    FINAL_PKG="$final_pkg"
     echo "Building output pkg at $final_pkg..."
     flatten_pkg "$root_dir" "$final_pkg"
     
     if [[ -n "$sign_package_id" ]]; then
         sign_package "$sign_package_id" "$final_pkg"
+    fi
+    
+    if [[ -n "$notarize_profile" ]]; then
+        notarize_pkg "$final_pkg" "$notarize_profile"
     fi
     
     echo "Rebranding complete! Output: $final_pkg"

@@ -34,6 +34,8 @@ The ```--sign-package``` option allows you to have a rebranded munki package tha
 
 The ```--sign-binaries``` option allows you to recursively sign the app binaries for the rebranded Managed Software Center, allowing for notarization of the pkg. To use this option, your Developer Application Certificate must be installed into the keychain. When using this option, you must specify the entire ```Common Name``` of the certificate. Example: ```"Developer ID Applications: Munki (U8PN57A5N2)"```
 
+The ```--notarize``` option submits the final, signed pkg for notarization using a [notarytool keychain profile](https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution/customizing_the_notarization_workflow). Provide the profile name you created with `xcrun notarytool store-credentials`. This requires the pkg to be signed (```--sign-package```) and will staple the notarization ticket to the output on success.
+
 For usage help please see ```sudo ./munki_rebrand.sh --help```
 
 ## Troubleshooting/Notes
@@ -53,3 +55,4 @@ You can run ```sudo xcode-select -s /Library/Developer/CommandLineTools``` to re
 ## To-do
 * Enable the splitting of the distribution pkg into its component pkgs so that the user can decide which to upgrade (perhaps they do not want to upgrade the launchd package if not necessary and can therefore avoid a reboot).
 * munkiimport the resulting pkg(s)?
+
