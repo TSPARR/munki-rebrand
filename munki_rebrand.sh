@@ -146,7 +146,7 @@ get_latest_munki_url() {
     fi
     
     local download_url
-    download_url=$(echo "$json_response" | "$JQ" -r '.assets[0].browser_download_url' 2>/dev/null)
+    download_url=$(echo "$json_response" | "$JQ" -r '.assets[] | to_entries[] | select(.key|contains("browser_download_url")) | select(.value|contains("munkitools")) | .value' 2>/dev/null)
     
     if [[ -z "$download_url" || "$download_url" == "null" ]]; then
         die "Failed to extract download URL from GitHub API response"
